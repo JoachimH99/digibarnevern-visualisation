@@ -42,13 +42,19 @@ const STAGES = [
   'Fiks is locked.',
   'Normal flow again, now with yellow packets.',
   "Replay causes downtime. Can't write. Reading is possible, but the data is incomplete",
+  'The db is replaced by two parallel dbs, A and B.',
 ]
-const FIKS_ACTIVE = [true, true, false, false, false, true, true, true, false, false, false, true, false]
-const REPLAY_ACTIVE = [false, false, false, true, false, false, false, false, false, true, false, false, true]
-const REPLAY_VISIBLE = [false, false, false, true, true, false, false, false, false, true, true, false, true]
-const YELLOW_PROC = [false, false, false, false, false, false, true, true, true, true, true, true, false]
-const DB_DOWN = [false, true, true, false, false, false, false, true, true, false, false, false, false]
-const ROCKET = [false, true, false, false, false, false, false, true, false, false, false, false, false]
+const FIKS_ACTIVE = [true, true, false, false, false, true, true, true, false, false, false, true, false, false]
+const REPLAY_ACTIVE = [false, false, false, true, false, false, false, false, false, true, false, false, true, false]
+const REPLAY_VISIBLE = [false, false, false, true, true, false, false, false, false, true, true, false, true, true]
+const YELLOW_PROC = [false, false, false, false, false, false, true, true, true, true, true, true, false, false]
+const DB_DOWN = [false, true, true, false, false, false, false, true, true, false, false, false, false, false]
+const ROCKET = [false, true, false, false, false, false, false, true, false, false, false, false, false, false]
+const TWO_DBS = [false, false, false, false, false, false, false, false, false, false, false, false, false, true]
+const DB_A_Y = 70
+const DB_B_Y = 250
+const READ_X = 1100 // Read API centre
+const READ_TARGET: ('A' | 'B')[] = TWO_DBS.map(() => 'A') // which DB the Read API is connected to
 
 const len = (a: Pt, b: Pt) => Math.hypot(b[0] - a[0], b[1] - a[1])
 
@@ -83,6 +89,7 @@ export default function App() {
   const nextId = useRef(0)
 
   const stageRef = useRef(0)
+  const vbWidth = useRef(1000) // animated viewBox width (zooms out when the Read API appears)
 
   // Apply stage settings (in-flight packets are kept)
   useEffect(() => {
@@ -94,6 +101,12 @@ export default function App() {
       falling.current = []
       setBucket(BUCKET_MAX)
       setDbItems(Array(4).fill(BLUE))
+    }
+    if (stage === 13) {
+      // Clear everything in motion; the bucket stays full
+      packets.current = []
+      falling.current = []
+      setBucket(BUCKET_MAX)
     }
     const delay = ROCKET[stage] ? 1200 : 0
     const t = setTimeout(() => {
@@ -159,6 +172,9 @@ export default function App() {
         } else keep.push(p)
       }
       packets.current = keep
+      const targetW = TWO_DBS[stageRef.current] ? 1180 : 1000
+      vbWidth.current += (targetW - vbWidth.current) * 0.08
+      if (Math.abs(targetW - vbWidth.current) < 0.5) vbWidth.current = targetW
       falling.current = falling.current.filter((f) => now - f.t0 < 1200)
       tick()
       raf = requestAnimationFrame(loop)
@@ -181,12 +197,21 @@ export default function App() {
   const locked = !FIKS_ACTIVE[stage] && stage > 0
   const replayOn = REPLAY_VISIBLE[stage]
   const procYellow = YELLOW_PROC[stage]
+  const twoDbs = TWO_DBS[stage]
+  const readY = READ_TARGET[stage] === 'A' ? DB_A_Y : DB_B_Y
 
   return (
     <>
-      <svg viewBox="0 0 1000 480">
+      <svg viewBox={`0 0 ${vbWidth.current} 480`}>
         {/* edges */}
-        <path className="edge" d={`M${F} L${P} L${D}`} />
+        <path className="edge" d={`M${F} L${P}`} />
+        <g className={`fade ${twoDbs ? 'hidden' : ''}`}>
+          <path className="edge" d={`M${P} L${D}`} />
+        </g>
+        <g className={`fade ${twoDbs ? '' : 'hidden'}`}>
+          <path className="edge" d={`M${P} L700,${P[1]} L700,${DB_A_Y} L${D[0]},${DB_A_Y}`} />
+          <path className="edge" d={`M${P} L700,${P[1]} L700,${DB_B_Y} L${D[0]},${DB_B_Y}`} />
+        </g>
         <path className="edge" d={`M${M} L${B}`} />
         <g className={`fade ${replayOn ? '' : 'hidden'}`}>
           <path className="edge" d={`M${B} L${R} L${P}`} />
@@ -241,7 +266,7 @@ export default function App() {
         </g>
 
         {/* DB */}
-        <g className={`node ${dbDown ? 'down' : ''}`} transform={`translate(${DB_X - 50} ${D[1] - 45})`}>
+        <g className={`node fade ${twoDbs ? 'hidden' : ''} ${dbDown ? 'down' : ''}`} transform={`translate(${DB_X - 50} ${D[1] - 45})`}>
           <g className={`db-body ${dbDown ? 'gone' : ''}`}>
             <path d="M0 10 V80 a50 14 0 0 0 100 0 V10" fill="#fff" stroke="#1f2937" strokeWidth="2" />
             <ellipse cx="50" cy="10" rx="50" ry="14" fill="#fff" stroke="#1f2937" strokeWidth="2" />
@@ -250,6 +275,31 @@ export default function App() {
             ))}
           </g>
           <text x="50" y="125">DB</text>
+        </g>
+
+        {/* Two parallel DBs (A and B) */}
+        {[
+          { label: 'DB A', y: DB_A_Y },
+          { label: 'DB B', y: DB_B_Y },
+        ].map((d) => (
+          <g key={d.label} className={`node fade ${twoDbs ? '' : 'hidden'}`} transform={`translate(${DB_X - 50} ${d.y - 45})`}>
+            <path d="M0 10 V80 a50 14 0 0 0 100 0 V10" fill="#fff" stroke="#1f2937" strokeWidth="2" />
+            <ellipse cx="50" cy="10" rx="50" ry="14" fill="#fff" stroke="#1f2937" strokeWidth="2" />
+            <text x="50" y="125">{d.label}</text>
+          </g>
+        ))}
+
+        {/* Read API, connected to one DB at a time */}
+        <g className={`fade ${twoDbs ? '' : 'hidden'}`}>
+          {/* moves up/down (animated) to the DB it is connected to */}
+          <g style={{ transform: `translateY(${readY}px)`, transition: 'transform 0.8s ease-in-out' }}>
+            <line x1={READ_X - 60} y1={0} x2={DB_X + 50} y2={0} stroke="#1f2937" strokeWidth="2" />
+            <path d={`M${DB_X + 50} 0 l12 -6 v12 z`} fill="#1f2937" />
+            <g className="node" transform={`translate(${READ_X - 60} -35)`}>
+              <rect width="120" height="70" rx="8" />
+              <text x="60" y="41">Read API</text>
+            </g>
+          </g>
         </g>
 
         {/* Rocket */}
