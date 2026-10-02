@@ -7,6 +7,7 @@ type Packet = {
   path: Pt[]
   colors: string[]
   procSeg: number // first segment after the processing app
+  speed?: number // px per second (defaults to SPEED)
   latched?: string // colour decided when the packet reaches processing
 }
 
@@ -17,6 +18,7 @@ const BLUE = '#3b82f6'
 const YELLOW = '#facc15'
 const GREEN = '#22c55e'
 const SPEED = 170 // px per second
+const SEQ_SPEED = 450 // faster balls in the looping sequence (step 13)
 
 const F: Pt = [110, 170]
 const M: Pt = [335, 170]
@@ -27,6 +29,8 @@ const B: Pt = [335, 370]
 const R: Pt = [560, 370]
 
 const LOADING_STAGE = 10 // step 11
+const TWO_DB_STAGE = 11 // step 12
+const SEQ_STAGE = 12 // step 13: looping rocket / replay / swap sequence
 const BUCKET_MAX = 16
 
 const STAGES = [
@@ -42,23 +46,25 @@ const STAGES = [
   'Normal flow again, now with yellow packets.',
   "Replay causes downtime. Can't write. Reading is possible, but the data is incomplete",
   'The db is replaced by two parallel dbs, A and B.',
+  'Read API is always up',
 ]
-const FIKS_ACTIVE = [true, true, false, false, true, true, true, false, false, true, false, false]
-const REPLAY_ACTIVE = [false, false, false, true, false, false, false, false, true, false, true, false]
-const REPLAY_VISIBLE = [false, false, false, true, false, false, false, false, true, false, true, true]
-const YELLOW_PROC = [false, false, false, false, false, true, true, true, true, true, false, false]
-const DB_DOWN = [false, true, true, false, false, false, true, true, false, false, false, false]
-const ROCKET = [false, true, false, false, false, false, true, false, false, false, false, false]
-const TWO_DBS = [false, false, false, false, false, false, false, false, false, false, false, true]
+const FIKS_ACTIVE = [true, true, false, false, true, true, true, false, false, true, false, false, false]
+const REPLAY_ACTIVE = [false, false, false, true, false, false, false, false, true, false, true, false, false]
+const REPLAY_VISIBLE = [false, false, false, true, false, false, false, false, true, false, true, true, true]
+const YELLOW_PROC = [false, false, false, false, false, true, true, true, true, true, false, false, false]
+const DB_DOWN = [false, true, true, false, false, false, true, true, false, false, false, false, false]
+const ROCKET = [false, true, false, false, false, false, true, false, false, false, false, false, false]
+const TWO_DBS = [false, false, false, false, false, false, false, false, false, false, false, true, true]
 const DB_A_Y = 70
 const DB_B_Y = 250
+const DA_END: Pt = [D[0], DB_A_Y] // end of the line into DB A
+const DB_END: Pt = [D[0], DB_B_Y] // end of the line into DB B
 const READ_X = 1100 // Read API centre
-const READ_TARGET: ('A' | 'B')[] = TWO_DBS.map(() => 'A') // which DB the Read API is connected to
 
 const len = (a: Pt, b: Pt) => Math.hypot(b[0] - a[0], b[1] - a[1])
 
 function locate(p: Packet, now: number) {
-  let d = ((now - p.t0) / 1000) * SPEED
+  let d = ((now - p.t0) / 1000) * (p.speed ?? SPEED)
   if (d < 0) return null
   for (let i = 0; i < p.path.length - 1; i++) {
     const l = len(p.path[i], p.path[i + 1])
@@ -82,6 +88,17 @@ export default function App() {
   const [bucket, setBucket] = useState(0)
   const falling = useRef<{ id: number; color: string; t0: number }[]>([])
   const [dbDown, setDbDown] = useState(false)
+  // Two-DB state (step 12+): contents, "down" flags, Read API target and the looping rocket
+  const [dbAItems, setDbAItems] = useState<string[]>([])
+  const [dbBItems, setDbBItems] = useState<string[]>([])
+  const [downA, setDownA] = useState(false)
+  const [downB, setDownB] = useState(false)
+  const [readTarget, setReadTarget] = useState<'A' | 'B'>('A')
+  const [seqRocket, setSeqRocket] = useState<{ key: number; y: number } | null>(null)
+  const seqReplayRef = useRef(false) // sequence: replay currently sending
+  const seqTargetRef = useRef<'A' | 'B'>('B') // sequence: DB that replay writes to
+  const downARef = useRef(false)
+  const downBRef = useRef(false)
   const [, tick] = useReducer((n: number) => n + 1, 0)
   const packets = useRef<Packet[]>([])
   const dbDownRef = useRef(false)
@@ -113,7 +130,7 @@ export default function App() {
       setBucket(BUCKET_MAX)
       setDbItems(Array(4).fill(BLUE))
     }
-    if (stage === STAGES.length - 1) {
+    if (stage === TWO_DB_STAGE || stage === SEQ_STAGE) {
       // Clear everything in motion; the bucket stays full
       packets.current = []
       falling.current = []
@@ -132,10 +149,86 @@ export default function App() {
     return () => clearTimeout(t)
   }, [stage])
 
+  // Step 13: looping sequence. Blow up B, replay into B, swap Read API to B, then the same for A.
+  useEffect(() => {
+    if (stage !== SEQ_STAGE) return
+    let cancelled = false
+    const timers: number[] = []
+    const wait = (ms: number) =>
+      new Promise<void>((res) => {
+        timers.push(window.setTimeout(res, ms))
+      })
+    const waitUntil = async (cond: () => boolean) => {
+      while (!cancelled && !cond()) await wait(50)
+    }
+    const setDown = (t: 'A' | 'B', v: boolean) => {
+      if (t === 'A') {
+        downARef.current = v
+        setDownA(v)
+      } else {
+        downBRef.current = v
+        setDownB(v)
+      }
+    }
+    const setItems = (t: 'A' | 'B', items: string[]) => (t === 'A' ? setDbAItems(items) : setDbBItems(items))
+    let rocketKey = 0
+
+    const run = async () => {
+      // Start state: both DBs hold data, Read API on A, bucket full
+      setDbAItems(Array(8).fill(BLUE))
+      setDbBItems(Array(8).fill(BLUE))
+      setDown('A', false)
+      setDown('B', false)
+      setReadTarget('A')
+      sentRef.current = 0
+      setSent(0)
+      await wait(600)
+      while (!cancelled) {
+        for (const t of ['B', 'A'] as const) {
+          // 1. Rocket blows up the DB (fast rocket, see .fast in the CSS)
+          setSeqRocket({ key: ++rocketKey, y: t === 'A' ? DB_A_Y : DB_B_Y })
+          await wait(600)
+          if (cancelled) return
+          setDown(t, true)
+          setItems(t, [])
+          await wait(300)
+          if (cancelled) return
+          // 2. Replay into the DB, to completion
+          setSeqRocket(null)
+          setDown(t, false)
+          seqTargetRef.current = t
+          sentRef.current = 0
+          setSent(0)
+          seqReplayRef.current = true
+          await waitUntil(() => sentRef.current >= bucketRef.current && packets.current.length === 0)
+          seqReplayRef.current = false
+          if (cancelled) return
+          // 3. Swap the Read API to this DB, and go straight on to the next phase
+          setReadTarget(t)
+        }
+      }
+    }
+    run()
+
+    return () => {
+      cancelled = true
+      timers.forEach(clearTimeout)
+      seqReplayRef.current = false
+      setSeqRocket(null)
+      setDown('A', false)
+      setDown('B', false)
+      setReadTarget('A')
+      setDbAItems([])
+      setDbBItems([])
+      sentRef.current = 0
+      setSent(0)
+    }
+  }, [stage])
+
   // Emit packets (one continuous emitter that reads the current stage)
   useEffect(() => {
-    const add = (t0: number, path: Pt[], colors: string[], procSeg = 99) =>
-      packets.current.push({ id: nextId.current++, t0, path, colors, procSeg })
+    const add = (t0: number, path: Pt[], colors: string[], procSeg = 99, speed?: number) =>
+      packets.current.push({ id: nextId.current++, t0, path, colors, procSeg, speed })
     const emitFiks = () => {
       const stage = stageRef.current
       const now = performance.now()
@@ -147,7 +240,9 @@ export default function App() {
     // Replay emits three times as often, at the same speed. One ball per bucket ball (first in, first out).
     const emitReplay = () => {
       const stage = stageRef.current
-      if (stage === LOADING_STAGE) {
+      if (stage === SEQ_STAGE) {
+        // handled by emitSeq (faster)
+      } else if (stage === LOADING_STAGE) {
         // Step 13 runs forever: no marking, no limit
         add(performance.now(), [B, R, P, D], [BLUE, BLUE, BLUE], 2)
       } else if (REPLAY_ACTIVE[stage] && sentRef.current < bucketRef.current) {
@@ -160,9 +255,24 @@ export default function App() {
     emitReplay()
     const i1 = setInterval(emitFiks, 1100)
     const i2 = setInterval(emitReplay, 1100 / 3)
+    // Step 13 only: faster balls, emitted proportionally more often so the spacing stays the same
+    const emitSeq = () => {
+      if (stageRef.current !== SEQ_STAGE) return
+      if (seqReplayRef.current && sentRef.current < bucketRef.current) {
+        const t = seqTargetRef.current
+        const y = t === 'A' ? DB_A_Y : DB_B_Y
+        const bend1: Pt = [700, P[1]]
+        const bend2: Pt = [700, y]
+        add(performance.now(), [B, R, P, bend1, bend2, t === 'A' ? DA_END : DB_END], [BLUE, BLUE], 2, SEQ_SPEED)
+        sentRef.current++
+        setSent(sentRef.current)
+      }
+    }
+    const i3 = setInterval(emitSeq, 1100 / 3 / (SEQ_SPEED / SPEED))
     return () => {
       clearInterval(i1)
       clearInterval(i2)
+      clearInterval(i3)
     }
   }, [])
 
@@ -176,7 +286,15 @@ export default function App() {
         const r = locate(p, now)
         if (r === 'done') {
           const end = p.path[p.path.length - 1]
-          if (end === D && !dbDownRef.current) {
+          if (end === DA_END || end === DB_END) {
+            const c = p.latched ?? p.colors[p.colors.length - 1]
+            const isA = end === DA_END
+            if (!(isA ? downARef.current : downBRef.current)) {
+              const add = (x: string[]) => [...x, c].slice(-12)
+              if (isA) setDbAItems(add)
+              else setDbBItems(add)
+            }
+          } else if (end === D && !dbDownRef.current) {
             const c = p.latched ?? p.colors[p.colors.length - 1]
             // Keep the bottom 4 (oldest) balls; evict the 5th instead so a mix stays visible
             setDbItems((x) => {
@@ -216,7 +334,7 @@ export default function App() {
   const replayOn = REPLAY_VISIBLE[stage]
   const procYellow = YELLOW_PROC[stage]
   const twoDbs = TWO_DBS[stage]
-  const readY = READ_TARGET[stage] === 'A' ? DB_A_Y : DB_B_Y
+  const readY = readTarget === 'A' ? DB_A_Y : DB_B_Y
 
   return (
     <>
@@ -310,12 +428,17 @@ export default function App() {
 
         {/* Two parallel DBs (A and B) */}
         {[
-          { label: 'DB A', y: DB_A_Y },
-          { label: 'DB B', y: DB_B_Y },
+          { label: 'DB A', y: DB_A_Y, items: dbAItems, down: downA },
+          { label: 'DB B', y: DB_B_Y, items: dbBItems, down: downB },
         ].map((d) => (
-          <g key={d.label} className={`node fade ${twoDbs ? '' : 'hidden'}`} transform={`translate(${DB_X - 50} ${d.y - 45})`}>
-            <path d="M0 10 V80 a50 14 0 0 0 100 0 V10" fill="#fff" stroke="#1f2937" strokeWidth="2" />
-            <ellipse cx="50" cy="10" rx="50" ry="14" fill="#fff" stroke="#1f2937" strokeWidth="2" />
+          <g key={d.label} className={`node fade ${twoDbs ? '' : 'hidden'} ${d.down ? 'down' : ''}`} transform={`translate(${DB_X - 50} ${d.y - 45})`}>
+            <g className={`db-body ${d.down ? 'gone' : ''}`}>
+              <path d="M0 10 V80 a50 14 0 0 0 100 0 V10" fill="#fff" stroke="#1f2937" strokeWidth="2" />
+              <ellipse cx="50" cy="10" rx="50" ry="14" fill="#fff" stroke="#1f2937" strokeWidth="2" />
+              {d.items.map((c, i) => (
+                <circle key={i} cx={22 + (i % 4) * 19} cy={70 - Math.floor(i / 4) * 18} r={7} fill={c} />
+              ))}
+            </g>
             <text x="50" y="125">{d.label}</text>
           </g>
         ))}
@@ -336,6 +459,16 @@ export default function App() {
         {/* Rocket */}
         {ROCKET[stage] && (
           <g key={stage} transform={`translate(${DB_X} ${D[1]})`}>
+            <g className="rocket-wrap">
+              <g className="rocket">
+                <text fontSize="40" textAnchor="middle" dominantBaseline="middle">🚀</text>
+              </g>
+            </g>
+            <text className="boom" fontSize="90" textAnchor="middle" dominantBaseline="middle">💥</text>
+          </g>
+        )}
+        {seqRocket && (
+          <g key={seqRocket.key} className="fast" transform={`translate(${DB_X} ${seqRocket.y})`}>
             <g className="rocket-wrap">
               <g className="rocket">
                 <text fontSize="40" textAnchor="middle" dominantBaseline="middle">🚀</text>
