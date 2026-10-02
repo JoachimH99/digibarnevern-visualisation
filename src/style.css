@@ -23,3 +23,5 @@ svg { width: min(96vw, 1100px); height: auto; }
 .controls button { font: inherit; padding: 8px 18px; border: 2px solid var(--ink); background: #fff; border-radius: 6px; cursor: pointer; }
 .controls button:disabled { opacity: 0.3; cursor: default; }
 .caption { min-height: 2.6em; max-width: 640px; text-align: center; font-size: 18px; }
+.sent-flash { transform-box: fill-box; transform-origin: center; animation: sentflash 0.5s ease-out; }
+@keyframes sentflash { 0% { transform: scale(1); } 40% { transform: scale(1.9); } 100% { transform: scale(1); } }

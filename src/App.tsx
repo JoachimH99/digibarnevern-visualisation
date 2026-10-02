@@ -15,6 +15,7 @@ let procColor = '#3b82f6'
 
 const BLUE = '#3b82f6'
 const YELLOW = '#facc15'
+const GREEN = '#22c55e'
 const SPEED = 170 // px per second
 
 const F: Pt = [110, 170]
@@ -25,7 +26,7 @@ const DB_X = 900 // DB centre
 const B: Pt = [335, 370]
 const R: Pt = [560, 370]
 
-const LOADING_STAGE = 12 // step 13
+const LOADING_STAGE = 10 // step 11
 const BUCKET_MAX = 16
 
 const STAGES = [
@@ -33,24 +34,22 @@ const STAGES = [
   'A rocket blows up the db.',
   'Fiks is locked.',
   'The replay app appears and runs the bucket data through.',
-  'Fiks is locked.',
   'Fiks sends data. It is copied into a bucket and passed on to processing, then the db.',
   'Processing changes: packets are now yellow when put on the db. Colors are mixed.',
   'A rocket blows up the db again.',
   'Fiks is locked.',
   'Replay again: all packets are yellow, and the db is back to normal.',
-  'Fiks is locked.',
   'Normal flow again, now with yellow packets.',
   "Replay causes downtime. Can't write. Reading is possible, but the data is incomplete",
   'The db is replaced by two parallel dbs, A and B.',
 ]
-const FIKS_ACTIVE = [true, true, false, false, false, true, true, true, false, false, false, true, false, false]
-const REPLAY_ACTIVE = [false, false, false, true, false, false, false, false, false, true, false, false, true, false]
-const REPLAY_VISIBLE = [false, false, false, true, true, false, false, false, false, true, true, false, true, true]
-const YELLOW_PROC = [false, false, false, false, false, false, true, true, true, true, true, true, false, false]
-const DB_DOWN = [false, true, true, false, false, false, false, true, true, false, false, false, false, false]
-const ROCKET = [false, true, false, false, false, false, false, true, false, false, false, false, false, false]
-const TWO_DBS = [false, false, false, false, false, false, false, false, false, false, false, false, false, true]
+const FIKS_ACTIVE = [true, true, false, false, true, true, true, false, false, true, false, false]
+const REPLAY_ACTIVE = [false, false, false, true, false, false, false, false, true, false, true, false]
+const REPLAY_VISIBLE = [false, false, false, true, false, false, false, false, true, false, true, true]
+const YELLOW_PROC = [false, false, false, false, false, true, true, true, true, true, false, false]
+const DB_DOWN = [false, true, true, false, false, false, true, true, false, false, false, false]
+const ROCKET = [false, true, false, false, false, false, true, false, false, false, false, false]
+const TWO_DBS = [false, false, false, false, false, false, false, false, false, false, false, true]
 const DB_A_Y = 70
 const DB_B_Y = 250
 const READ_X = 1100 // Read API centre
@@ -89,11 +88,23 @@ export default function App() {
   const nextId = useRef(0)
 
   const stageRef = useRef(0)
+  const prevStageRef = useRef(0)
+  const [sent, setSent] = useState(0) // bucket balls already sent by replay (marked green)
+  const sentRef = useRef(0)
+  const bucketRef = useRef(0)
+  bucketRef.current = bucket
   const vbWidth = useRef(1000) // animated viewBox width (zooms out when the Read API appears)
 
   // Apply stage settings (in-flight packets are kept)
   useEffect(() => {
     stageRef.current = stage
+    // Reset the "sent" marks when a new replay run starts, or the replay app is gone
+    const prev = prevStageRef.current
+    prevStageRef.current = stage
+    if (!REPLAY_VISIBLE[stage] || (REPLAY_ACTIVE[stage] && !REPLAY_ACTIVE[prev])) {
+      sentRef.current = 0
+      setSent(0)
+    }
     procColor = YELLOW_PROC[stage] ? YELLOW : BLUE
     if (stage === LOADING_STAGE) {
       // Fresh start: clear everything in motion, fill the bucket, start the db at 4
@@ -102,7 +113,7 @@ export default function App() {
       setBucket(BUCKET_MAX)
       setDbItems(Array(4).fill(BLUE))
     }
-    if (stage === 13) {
+    if (stage === STAGES.length - 1) {
       // Clear everything in motion; the bucket stays full
       packets.current = []
       falling.current = []
@@ -133,10 +144,17 @@ export default function App() {
         add(now + (len(F, M) / SPEED) * 1000, [M, B], [BLUE])
       }
     }
-    // Replay emits three times as often, at the same speed
+    // Replay emits three times as often, at the same speed. One ball per bucket ball (first in, first out).
     const emitReplay = () => {
       const stage = stageRef.current
-      if (REPLAY_ACTIVE[stage]) add(performance.now(), [B, R, P, D], [BLUE, BLUE, BLUE], 2)
+      if (stage === LOADING_STAGE) {
+        // Step 13 runs forever: no marking, no limit
+        add(performance.now(), [B, R, P, D], [BLUE, BLUE, BLUE], 2)
+      } else if (REPLAY_ACTIVE[stage] && sentRef.current < bucketRef.current) {
+        add(performance.now(), [B, R, P, D], [BLUE, BLUE, BLUE], 2)
+        sentRef.current++
+        setSent(sentRef.current)
+      }
     }
     emitFiks()
     emitReplay()
@@ -260,9 +278,22 @@ export default function App() {
           <path d="M0 0 L15 80 H85 L100 0" fill="#fff" stroke="#1f2937" strokeWidth="2" />
           <ellipse cx="50" cy="0" rx="50" ry="8" fill="#fff" stroke="#1f2937" strokeWidth="2" />
           {Array.from({ length: bucket }).map((_, i) => (
-            <circle key={i} cx={28 + (i % 4) * 15} cy={70 - Math.floor(i / 4) * 14} r={6} fill={BLUE} />
+            <circle
+              key={i}
+              className={i === sent - 1 ? 'sent-flash' : ''}
+              cx={28 + (i % 4) * 15}
+              cy={70 - Math.floor(i / 4) * 14}
+              r={6}
+              fill={i < sent ? GREEN : BLUE}
+            />
           ))}
           <text x="50" y="108">GCP bucket</text>
+        </g>
+
+        {/* Check mark: all bucket data has been sent to replay */}
+        <g className={`fade ${replayOn && bucket > 0 && sent >= bucket ? '' : 'hidden'}`} transform="translate(447 335)">
+          <circle r="14" fill={GREEN} />
+          <path d="M-7 0 l5 6 l9 -11" fill="none" stroke="#fff" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
         </g>
 
         {/* DB */}
