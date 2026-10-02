@@ -28,3 +28,4 @@ svg { width: min(96vw, 1100px); height: auto; }
 .fast .rocket { animation-duration: 0.6s; }
 .fast .rocket-wrap { animation-delay: 0.6s; }
 .fast .boom { animation-duration: 0.6s; animation-delay: 0.55s; }
+.node.bug rect { stroke: #dc2626; }

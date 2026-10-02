@@ -8,6 +8,7 @@ type Packet = {
   colors: string[]
   procSeg: number // first segment after the processing app
   speed?: number // px per second (defaults to SPEED)
+  forceColor?: string // colour processing outputs for this ball, overriding its normal colour (bug)
   latched?: string // colour decided when the packet reaches processing
 }
 
@@ -17,6 +18,7 @@ let procColor = '#3b82f6'
 const BLUE = '#3b82f6'
 const YELLOW = '#facc15'
 const GREEN = '#22c55e'
+const RED = '#ef4444'
 const SPEED = 170 // px per second
 const SEQ_SPEED = 450 // faster balls in the looping sequence (step 13)
 
@@ -31,30 +33,36 @@ const R: Pt = [560, 370]
 const LOADING_STAGE = 10 // step 11
 const TWO_DB_STAGE = 11 // step 12
 const SEQ_STAGE = 12 // step 13: looping rocket / replay / swap sequence
+const BUG_STAGE = 13 // step 14: replay into B, buggy processing makes every 4th ball red
+const DESTROY_B_STAGE = 14 // step 15: replay stopped, rocket destroys DB B
 const BUCKET_MAX = 16
 
 const STAGES = [
-  'Fiks sends data. It is copied into a bucket and passed on to processing, then the db.',
-  'A rocket blows up the db.',
-  'Fiks is locked.',
-  'The replay app appears and runs the bucket data through.',
-  'Fiks sends data. It is copied into a bucket and passed on to processing, then the db.',
-  'Processing changes: packets are now yellow when put on the db. Colors are mixed.',
-  'A rocket blows up the db again.',
-  'Fiks is locked.',
-  'Replay again: all packets are yellow, and the db is back to normal.',
-  'Normal flow again, now with yellow packets.',
-  "Replay causes downtime. Can't write. Reading is possible, but the data is incomplete",
-  'The db is replaced by two parallel dbs, A and B.',
-  'Read API is always up',
+  'Innsendinger lagres i bøtte så fort de mottas, og sendes så videre for prosessering og lagring i database',
+  'Databasen går dukken!',
+  'Mottak stenges midlertidig.',
+  'Replay-applikasjonen kjører alle tidligere innsendinger gjennom systemet.',
+  'Systemet er tilbake i normal drift.',
+  'Det rulles ut en endring i prosesseringen. Innsendinger som er håndtert på forskjellige måter ligger blandet.',
+  'Vi kaster databasen og stenger mottak.',
+  'Vi kaster databasen og stenger mottak.',
+  'Replay igjen.',
+  'Normal drift. Alle innsendinger har nå vært gjennom den nye prosesseringen.',
+  "Replay forårsaker nedetid. Det er mulig å lese fra databasen underveis, men dataene vil være ufullstendige.",
+  'I Barnevernsregisteret har vi to parallelle database-instanser.',
+  'Man kan lese fra en database og kjøre replay i den andre.',
+  'Parallelle databaser gjør det også mulig å raskt avbryte replay ved behov.',
+  'Parallelle databaser gjør det også mulig å raskt avbryte replay ved behov.',
+  'Parallelle databaser gjør det også mulig å raskt avbryte replay ved behov.',
 ]
-const FIKS_ACTIVE = [true, true, false, false, true, true, true, false, false, true, false, false, false]
-const REPLAY_ACTIVE = [false, false, false, true, false, false, false, false, true, false, true, false, false]
-const REPLAY_VISIBLE = [false, false, false, true, false, false, false, false, true, false, true, true, true]
-const YELLOW_PROC = [false, false, false, false, false, true, true, true, true, true, false, false, false]
-const DB_DOWN = [false, true, true, false, false, false, true, true, false, false, false, false, false]
-const ROCKET = [false, true, false, false, false, false, true, false, false, false, false, false, false]
-const TWO_DBS = [false, false, false, false, false, false, false, false, false, false, false, true, true]
+const FIKS_ACTIVE = [true, true, false, false, true, true, true, false, false, true, false, false, false, false, false, true]
+const REPLAY_ACTIVE = [false, false, false, true, false, false, false, false, true, false, true, false, false, false, false, false]
+const REPLAY_VISIBLE = [false, false, true, true, false, false, false, true, true, false, true, true, true, true, true, false]
+const YELLOW_PROC = [false, false, false, false, false, true, true, true, true, true, false, false, false, false, false, false]
+const BUG_PROC = [false, false, false, false, false, false, false, false, false, false, false, false, false, true, true, false]
+const DB_DOWN = [false, true, true, false, false, false, true, true, false, false, false, false, false, false, false, false]
+const ROCKET = [false, true, false, false, false, false, true, false, false, false, false, false, false, false, false, false]
+const TWO_DBS = [false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true]
 const DB_A_Y = 70
 const DB_B_Y = 250
 const DA_END: Pt = [D[0], DB_A_Y] // end of the line into DB A
@@ -70,7 +78,7 @@ function locate(p: Packet, now: number) {
     const l = len(p.path[i], p.path[i + 1])
     if (d <= l) {
       const k = d / l
-      if (i >= p.procSeg && p.latched === undefined) p.latched = procColor
+      if (i >= p.procSeg && p.latched === undefined) p.latched = p.forceColor ?? procColor
       return {
         x: p.path[i][0] + (p.path[i + 1][0] - p.path[i][0]) * k,
         y: p.path[i][1] + (p.path[i + 1][1] - p.path[i][1]) * k,
@@ -86,7 +94,7 @@ export default function App() {
   const [stage, setStage] = useState(0)
   const [dbItems, setDbItems] = useState<string[]>([])
   const [bucket, setBucket] = useState(0)
-  const falling = useRef<{ id: number; color: string; t0: number }[]>([])
+  const falling = useRef<{ id: number; color: string; t0: number; y?: number }[]>([])
   const [dbDown, setDbDown] = useState(false)
   // Two-DB state (step 12+): contents, "down" flags, Read API target and the looping rocket
   const [dbAItems, setDbAItems] = useState<string[]>([])
@@ -98,6 +106,7 @@ export default function App() {
   const seqReplayRef = useRef(false) // sequence: replay currently sending
   const seqTargetRef = useRef<'A' | 'B'>('B') // sequence: DB that replay writes to
   const downARef = useRef(false)
+  const replayCount = useRef(0) // balls sent in the bug step (every 4th turns red)
   const downBRef = useRef(false)
   const [, tick] = useReducer((n: number) => n + 1, 0)
   const packets = useRef<Packet[]>([])
@@ -130,11 +139,22 @@ export default function App() {
       setBucket(BUCKET_MAX)
       setDbItems(Array(4).fill(BLUE))
     }
-    if (stage === TWO_DB_STAGE || stage === SEQ_STAGE) {
+    if (stage === TWO_DB_STAGE || stage === SEQ_STAGE || stage === BUG_STAGE) {
       // Clear everything in motion; the bucket stays full
       packets.current = []
       falling.current = []
       setBucket(BUCKET_MAX)
+    }
+    if (stage === BUG_STAGE) {
+      // DB A holds 8 balls, DB B starts at 4 (it loads up as replay runs), Read API stays on A
+      setDbAItems(Array(8).fill(BLUE))
+      setDbBItems(Array(4).fill(BLUE))
+      downARef.current = false
+      downBRef.current = false
+      setDownA(false)
+      setDownB(false)
+      setReadTarget('A')
+      replayCount.current = 0
     }
     const delay = ROCKET[stage] ? 1200 : 0
     const t = setTimeout(() => {
@@ -147,6 +167,28 @@ export default function App() {
       setDbDown(DB_DOWN[stage])
     }
     return () => clearTimeout(t)
+  }, [stage])
+
+  // Step 15: a rocket destroys DB B (it stays down in the following step)
+  useEffect(() => {
+    if (stage > DESTROY_B_STAGE) {
+      // Later steps: DB B stays destroyed
+      downBRef.current = true
+      setDownB(true)
+      setDbBItems([])
+      return
+    }
+    if (stage !== DESTROY_B_STAGE) return
+    setSeqRocket({ key: Date.now(), y: DB_B_Y })
+    const t = setTimeout(() => {
+      downBRef.current = true
+      setDownB(true)
+      setDbBItems([])
+    }, 1200)
+    return () => {
+      clearTimeout(t)
+      setSeqRocket(null)
+    }
   }, [stage])
 
   // Step 13: looping sequence. Blow up B, replay into B, swap Read API to B, then the same for A.
@@ -233,7 +275,12 @@ export default function App() {
       const stage = stageRef.current
       const now = performance.now()
       if (FIKS_ACTIVE[stage]) {
-        add(now, [F, P, D], [BLUE, BLUE], 1)
+        if (TWO_DBS[stage]) {
+          // Two-DB layout: Fiks writes to DB A
+          const bend1: Pt = [700, P[1]]
+          const bend2: Pt = [700, DB_A_Y]
+          add(now, [F, P, bend1, bend2, DA_END], [BLUE, BLUE], 1)
+        } else add(now, [F, P, D], [BLUE, BLUE], 1)
         add(now + (len(F, M) / SPEED) * 1000, [M, B], [BLUE])
       }
     }
@@ -242,6 +289,19 @@ export default function App() {
       const stage = stageRef.current
       if (stage === SEQ_STAGE) {
         // handled by emitSeq (faster)
+      } else if (stage === BUG_STAGE) {
+        // Infinite replay into DB B at normal speed; every fourth ball leaves processing red
+        replayCount.current++
+        const bend1: Pt = [700, P[1]]
+        const bend2: Pt = [700, DB_B_Y]
+        packets.current.push({
+          id: nextId.current++,
+          t0: performance.now(),
+          path: [B, R, P, bend1, bend2, DB_END],
+          colors: [BLUE, BLUE],
+          procSeg: 2,
+          forceColor: replayCount.current % 4 === 1 ? RED : undefined,
+        })
       } else if (stage === LOADING_STAGE) {
         // Step 13 runs forever: no marking, no limit
         add(performance.now(), [B, R, P, D], [BLUE, BLUE, BLUE], 2)
@@ -289,8 +349,18 @@ export default function App() {
           if (end === DA_END || end === DB_END) {
             const c = p.latched ?? p.colors[p.colors.length - 1]
             const isA = end === DA_END
-            if (!(isA ? downARef.current : downBRef.current)) {
-              const add = (x: string[]) => [...x, c].slice(-12)
+            if (stageRef.current === BUG_STAGE && c === RED) {
+              // Red (buggy) balls fall off even though the DB is there
+              falling.current.push({ id: nextId.current++, color: c, t0: now, y: end[1] })
+            } else if (isA ? downARef.current : downBRef.current) {
+              // Greyed-out DB: the ball falls
+              falling.current.push({ id: nextId.current++, color: c, t0: now, y: end[1] })
+            } else {
+              const add = (x: string[]) => {
+                // Bug step: loading effect on DB B, at 8 balls reset to 4
+                if (stageRef.current === BUG_STAGE) return x.length >= 8 ? x.slice(0, 4) : [...x, c]
+                return [...x, c].slice(-12)
+              }
               if (isA) setDbAItems(add)
               else setDbBItems(add)
             }
@@ -333,6 +403,7 @@ export default function App() {
   const locked = !FIKS_ACTIVE[stage] && stage > 0
   const replayOn = REPLAY_VISIBLE[stage]
   const procYellow = YELLOW_PROC[stage]
+  const bugProc = BUG_PROC[stage]
   const twoDbs = TWO_DBS[stage]
   const readY = readTarget === 'A' ? DB_A_Y : DB_B_Y
 
@@ -364,7 +435,7 @@ export default function App() {
         {falling.current.map((f) => {
           const t = Math.max(0, (now - f.t0) / 1000)
           return (
-            <circle key={f.id} cx={D[0] + 25 * t} cy={D[1] + 700 * t * t} r={9} fill={f.color} opacity={Math.max(0, 1 - t / 1.2)} />
+            <circle key={f.id} cx={D[0] + 25 * t} cy={(f.y ?? D[1]) + 700 * t * t} r={9} fill={f.color} opacity={Math.max(0, 1 - t / 1.2)} />
           )
         })}
 
@@ -372,17 +443,27 @@ export default function App() {
         <g className="node" transform={`translate(${F[0] - 60} ${F[1] - 35})`}>
           <rect width="120" height="70" rx="8" />
           <text x="60" y="41">Fiks IO</text>
-          <g className={`fade ${locked ? '' : 'hidden'}`} transform="translate(60 -8)">
-            <path d="M-9 0 v-10 a9 9 0 0 1 18 0 v10" fill="none" stroke="#1f2937" strokeWidth="3" />
-            <rect x="-14" y="0" width="28" height="22" rx="3" fill="#1f2937" stroke="none" />
+          <g className={`fade ${locked ? '' : 'hidden'}`} transform="translate(60 0)">
+            <text textAnchor="middle" dominantBaseline="middle" style={{ fontSize: 50 }}>🔒</text>
           </g>
         </g>
 
         {/* Processing */}
-        <g className={`node ${procYellow ? 'yellow' : ''}`} transform={`translate(${P[0] - 60} ${P[1] - 35})`}>
+        <g className={`node ${procYellow ? 'yellow' : ''} ${bugProc ? 'bug' : ''}`} transform={`translate(${P[0] - 60} ${P[1] - 35})`}>
           <rect width="120" height="70" rx="8" />
-          <text x="60" y="41">Processing</text>
+          <text x="60" y="41">Prosessering</text>
           {procYellow && <circle cx="100" cy="14" r="6" fill={YELLOW} />}
+          <text
+            className={`fade ${bugProc ? '' : 'hidden'}`}
+            x="10"
+            y="-20"
+            rotate={"60"}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            style={{ fontSize: 40 }}
+          >
+            🪲
+          </text>
         </g>
 
         {/* Replay */}
@@ -405,7 +486,7 @@ export default function App() {
               fill={i < sent ? GREEN : BLUE}
             />
           ))}
-          <text x="50" y="108">GCP bucket</text>
+          <text x="50" y="108">Bøtte</text>
         </g>
 
         {/* Check mark: all bucket data has been sent to replay */}
@@ -468,7 +549,7 @@ export default function App() {
           </g>
         )}
         {seqRocket && (
-          <g key={seqRocket.key} className="fast" transform={`translate(${DB_X} ${seqRocket.y})`}>
+          <g key={seqRocket.key} className={stage === SEQ_STAGE ? 'fast' : undefined} transform={`translate(${DB_X} ${seqRocket.y})`}>
             <g className="rocket-wrap">
               <g className="rocket">
                 <text fontSize="40" textAnchor="middle" dominantBaseline="middle">🚀</text>
