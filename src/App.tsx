@@ -9,6 +9,11 @@ type Packet = {
   procSeg: number // first segment after the processing app
   speed?: number // px per second (defaults to SPEED)
   forceColor?: string // colour processing outputs for this ball, overriding its normal colour (bug)
+  // Fiks balls: moved by distance so they can wait at the padlock
+  dist?: number // distance travelled along the path (when set, replaces time-based motion)
+  lockDist?: number // distance at which the padlock sits
+  copyAt?: number // distance at which a copy is dropped into the bucket
+  copied?: boolean
   latched?: string // colour decided when the packet reaches processing
 }
 
@@ -68,11 +73,30 @@ const DB_B_Y = 250
 const DA_END: Pt = [D[0], DB_A_Y] // end of the line into DB A
 const DB_END: Pt = [D[0], DB_B_Y] // end of the line into DB B
 const READ_X = 1100 // Read API centre
+const LOCK_X = 285 // padlock position on the Fiks line, just before the split to the bucket
+const LOCK_SPACING = 22 // gap between balls waiting at the padlock
+const LOCK_QUEUE_MAX = 4 // max balls waiting at the padlock
+const LOCK_STOP = LOCK_X - 30 - F[0] // distance along the Fiks line where the first waiting ball stops
+
+// A ball leaving Fiks (moved by distance so it can wait at the padlock)
+function fiksPacket(id: number, twoDbs: boolean, t0: number, dist = 0): Packet {
+  const path: Pt[] = twoDbs ? [F, P, [700, P[1]], [700, DB_A_Y], DA_END] : [F, P, D]
+  return {
+    id,
+    t0,
+    path,
+    colors: [BLUE, BLUE],
+    procSeg: 1,
+    dist,
+    lockDist: LOCK_STOP,
+    copyAt: M[0] - F[0],
+  }
+}
 
 const len = (a: Pt, b: Pt) => Math.hypot(b[0] - a[0], b[1] - a[1])
 
 function locate(p: Packet, now: number) {
-  let d = ((now - p.t0) / 1000) * (p.speed ?? SPEED)
+  let d = p.dist ?? ((now - p.t0) / 1000) * (p.speed ?? SPEED)
   if (d < 0) return null
   for (let i = 0; i < p.path.length - 1; i++) {
     const l = len(p.path[i], p.path[i + 1])
@@ -107,6 +131,8 @@ export default function App() {
   const seqTargetRef = useRef<'A' | 'B'>('B') // sequence: DB that replay writes to
   const downARef = useRef(false)
   const replayCount = useRef(0) // balls sent in the bug step (every 4th turns red)
+  const lockedRef = useRef(false) // Fiks is locked: its balls wait at the padlock
+  const lastFrame = useRef(0)
   const downBRef = useRef(false)
   const [, tick] = useReducer((n: number) => n + 1, 0)
   const packets = useRef<Packet[]>([])
@@ -132,6 +158,7 @@ export default function App() {
       setSent(0)
     }
     procColor = YELLOW_PROC[stage] ? YELLOW : BLUE
+    lockedRef.current = !FIKS_ACTIVE[stage] && stage > 0
     if (stage === LOADING_STAGE) {
       // Fresh start: clear everything in motion, fill the bucket, start the db at 4
       packets.current = []
@@ -172,6 +199,14 @@ export default function App() {
       falling.current = []
       setBucket(0)
       setDbItems([])
+    }
+    // Steps 12-15: the queue at the padlock is full from the start
+    if (stage > LOADING_STAGE && stage <= DESTROY_B_STAGE) {
+      const waiting = packets.current.filter((p) => p.lockDist !== undefined && (p.dist ?? 0) <= p.lockDist).length
+      const t0 = performance.now()
+      for (let i = 0; i < LOCK_QUEUE_MAX - waiting; i++) {
+        packets.current.push(fiksPacket(nextId.current++, TWO_DBS[stage], t0, LOCK_STOP - i * LOCK_SPACING))
+      }
     }
     const delay = ROCKET[stage] ? 1200 : 0
     const t = setTimeout(() => {
@@ -259,7 +294,10 @@ export default function App() {
           sentRef.current = 0
           setSent(0)
           seqReplayRef.current = true
-          await waitUntil(() => sentRef.current >= bucketRef.current && packets.current.length === 0)
+          // Done when everything is sent and no replay ball is still on its way (Fiks balls waiting at the padlock don't count)
+          await waitUntil(
+            () => sentRef.current >= bucketRef.current && !packets.current.some((p) => p.path[0] === B),
+          )
           seqReplayRef.current = false
           if (cancelled) return
           // 3. Swap the Read API to this DB, and go straight on to the next phase
@@ -290,16 +328,14 @@ export default function App() {
       packets.current.push({ id: nextId.current++, t0, path, colors, procSeg, speed })
     const emitFiks = () => {
       const stage = stageRef.current
+      if (stage === 0) return // step 1: nothing flows
       const now = performance.now()
-      if (FIKS_ACTIVE[stage]) {
-        if (TWO_DBS[stage]) {
-          // Two-DB layout: Fiks writes to DB A
-          const bend1: Pt = [700, P[1]]
-          const bend2: Pt = [700, DB_A_Y]
-          add(now, [F, P, bend1, bend2, DA_END], [BLUE, BLUE], 1)
-        } else add(now, [F, P, D], [BLUE, BLUE], 1)
-        add(now + (len(F, M) / SPEED) * 1000, [M, B], [BLUE])
+      // While locked, balls still leave Fiks and queue up at the padlock (cap the queue)
+      if (lockedRef.current) {
+        const waiting = packets.current.filter((p) => p.lockDist !== undefined && (p.dist ?? 0) <= p.lockDist).length
+        if (waiting >= LOCK_QUEUE_MAX) return
       }
+      packets.current.push(fiksPacket(nextId.current++, TWO_DBS[stage], now))
     }
     // Replay emits three times as often, at the same speed. One ball per bucket ball (first in, first out).
     const emitReplay = () => {
@@ -358,6 +394,23 @@ export default function App() {
     let raf = 0
     const loop = () => {
       const now = performance.now()
+      const dt = lastFrame.current ? Math.min(0.05, (now - lastFrame.current) / 1000) : 0
+      lastFrame.current = now
+      // Move Fiks balls by distance. While locked they stop (and queue) at the padlock.
+      const movers = packets.current.filter((p) => p.dist !== undefined).sort((a, b) => b.dist! - a.dist!)
+      let ceiling = Infinity
+      for (const p of movers) {
+        let nd = p.dist! + (p.speed ?? SPEED) * dt
+        if (lockedRef.current && p.lockDist !== undefined && p.dist! <= p.lockDist) {
+          nd = Math.max(p.dist!, Math.min(nd, ceiling, p.lockDist))
+          ceiling = nd - LOCK_SPACING
+        }
+        p.dist = nd
+        if (p.copyAt !== undefined && !p.copied && nd >= p.copyAt) {
+          p.copied = true
+          packets.current.push({ id: nextId.current++, t0: now, path: [M, B], colors: [BLUE], procSeg: 99 })
+        }
+      }
       const keep: Packet[] = []
       for (const p of packets.current) {
         const r = locate(p, now)
@@ -456,13 +509,15 @@ export default function App() {
           )
         })}
 
+        {/* Padlock on the line, just before the split to the bucket */}
+        <g className={`fade ${locked ? '' : 'hidden'}`} transform={`translate(${LOCK_X} ${F[1]})`}>
+          <text textAnchor="middle" dominantBaseline="middle" style={{ fontSize: 50 }}>🔒</text>
+        </g>
+
         {/* Fiks */}
         <g className="node" transform={`translate(${F[0] - 60} ${F[1] - 35})`}>
           <rect width="120" height="70" rx="8" />
           <text x="60" y="41">Fiks IO</text>
-          <g className={`fade ${locked ? '' : 'hidden'}`} transform="translate(60 0)">
-            <text textAnchor="middle" dominantBaseline="middle" style={{ fontSize: 50 }}>🔒</text>
-          </g>
         </g>
 
         {/* Processing */}
