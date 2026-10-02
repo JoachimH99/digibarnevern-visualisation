@@ -25,6 +25,9 @@ const DB_X = 900 // DB centre
 const B: Pt = [335, 370]
 const R: Pt = [560, 370]
 
+const LOADING_STAGE = 12 // step 13
+const BUCKET_MAX = 16
+
 const STAGES = [
   'Fiks sends data. It is copied into a bucket and passed on to processing, then the db.',
   'A rocket blows up the db.',
@@ -38,13 +41,14 @@ const STAGES = [
   'Replay again: all packets are yellow, and the db is back to normal.',
   'Fiks is locked.',
   'Normal flow again, now with yellow packets.',
+  "Replay causes downtime. Can't write. Reading is possible, but the data is incomplete",
 ]
-const FIKS_ACTIVE = [true, true, false, false, false, true, true, true, false, false, false, true]
-const REPLAY_ACTIVE = [false, false, false, true, false, false, false, false, false, true, false, false]
-const REPLAY_VISIBLE = [false, false, false, true, true, false, false, false, false, true, true, false]
-const YELLOW_PROC = [false, false, false, false, false, false, true, true, true, true, true, true]
-const DB_DOWN = [false, true, true, false, false, false, false, true, true, false, false, false]
-const ROCKET = [false, true, false, false, false, false, false, true, false, false, false, false]
+const FIKS_ACTIVE = [true, true, false, false, false, true, true, true, false, false, false, true, false]
+const REPLAY_ACTIVE = [false, false, false, true, false, false, false, false, false, true, false, false, true]
+const REPLAY_VISIBLE = [false, false, false, true, true, false, false, false, false, true, true, false, true]
+const YELLOW_PROC = [false, false, false, false, false, false, true, true, true, true, true, true, false]
+const DB_DOWN = [false, true, true, false, false, false, false, true, true, false, false, false, false]
+const ROCKET = [false, true, false, false, false, false, false, true, false, false, false, false, false]
 
 const len = (a: Pt, b: Pt) => Math.hypot(b[0] - a[0], b[1] - a[1])
 
@@ -84,6 +88,13 @@ export default function App() {
   useEffect(() => {
     stageRef.current = stage
     procColor = YELLOW_PROC[stage] ? YELLOW : BLUE
+    if (stage === LOADING_STAGE) {
+      // Fresh start: clear everything in motion, fill the bucket, start the db at 4
+      packets.current = []
+      falling.current = []
+      setBucket(BUCKET_MAX)
+      setDbItems(Array(4).fill(BLUE))
+    }
     const delay = ROCKET[stage] ? 1200 : 0
     const t = setTimeout(() => {
       dbDownRef.current = DB_DOWN[stage]
@@ -137,10 +148,14 @@ export default function App() {
           if (end === D && !dbDownRef.current) {
             const c = p.latched ?? p.colors[p.colors.length - 1]
             // Keep the bottom 4 (oldest) balls; evict the 5th instead so a mix stays visible
-            setDbItems((x) => (x.length >= 12 ? [...x.slice(0, 4), ...x.slice(5), c] : [...x, c]))
+            setDbItems((x) => {
+              // Loading effect: at 8 balls, reset to 4
+              if (stageRef.current === LOADING_STAGE) return x.length >= 8 ? x.slice(0, 4) : [...x, c]
+              return x.length >= 12 ? [...x.slice(0, 4), ...x.slice(5), c] : [...x, c]
+            })
           } else if (end === D) {
             falling.current.push({ id: nextId.current++, color: p.latched ?? p.colors[p.colors.length - 1], t0: now })
-          } else if (end === B) setBucket((n) => Math.min(n + 1, 16))
+          } else if (end === B) setBucket((n) => Math.min(n + 1, BUCKET_MAX))
         } else keep.push(p)
       }
       packets.current = keep
@@ -195,7 +210,7 @@ export default function App() {
         {/* Fiks */}
         <g className="node" transform={`translate(${F[0] - 60} ${F[1] - 35})`}>
           <rect width="120" height="70" rx="8" />
-          <text x="60" y="41">Fiks</text>
+          <text x="60" y="41">Fiks IO</text>
           <g className={`fade ${locked ? '' : 'hidden'}`} transform="translate(60 -8)">
             <path d="M-9 0 v-10 a9 9 0 0 1 18 0 v10" fill="none" stroke="#1f2937" strokeWidth="3" />
             <rect x="-14" y="0" width="28" height="22" rx="3" fill="#1f2937" stroke="none" />
@@ -212,7 +227,7 @@ export default function App() {
         {/* Replay */}
         <g className={`node fade ${replayOn ? '' : 'hidden'}`} transform={`translate(${R[0] - 60} ${R[1] - 35})`}>
           <rect width="120" height="70" rx="8" />
-          <text x="60" y="41">Replay</text>
+          <text x="60" y="41">Replay app</text>
         </g>
 
         {/* Bucket */}
