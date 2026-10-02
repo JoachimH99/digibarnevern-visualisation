@@ -38,13 +38,13 @@ const DESTROY_B_STAGE = 14 // step 15: replay stopped, rocket destroys DB B
 const BUCKET_MAX = 16
 
 const STAGES = [
+  'En forenklet representasjon av Barnevernsregisteret.',
   'Innsendinger lagres i bøtte så fort de mottas, og sendes så videre for prosessering og lagring i database',
   'Databasen går dukken!',
   'Mottak stenges midlertidig.',
   'Replay-applikasjonen kjører alle tidligere innsendinger gjennom systemet.',
   'Systemet er tilbake i normal drift.',
   'Det rulles ut en endring i prosesseringen. Innsendinger som er håndtert på forskjellige måter ligger blandet.',
-  'Vi kaster databasen og stenger mottak.',
   'Vi kaster databasen og stenger mottak.',
   'Replay igjen.',
   'Normal drift. Alle innsendinger har nå vært gjennom den nye prosesseringen.',
@@ -55,13 +55,13 @@ const STAGES = [
   'Parallelle databaser gjør det også mulig å raskt avbryte replay ved behov.',
   'Parallelle databaser gjør det også mulig å raskt avbryte replay ved behov.',
 ]
-const FIKS_ACTIVE = [true, true, false, false, true, true, true, false, false, true, false, false, false, false, false, true]
-const REPLAY_ACTIVE = [false, false, false, true, false, false, false, false, true, false, true, false, false, false, false, false]
-const REPLAY_VISIBLE = [false, false, true, true, false, false, false, true, true, false, true, true, true, true, true, false]
-const YELLOW_PROC = [false, false, false, false, false, true, true, true, true, true, false, false, false, false, false, false]
+const FIKS_ACTIVE = [false, true, true, false, false, true, true, false, false, true, false, false, false, false, false, true]
+const REPLAY_ACTIVE = [false, false, false, false, true, false, false, false, true, false, true, false, false, false, false, false]
+const REPLAY_VISIBLE = [false, false, false, true, true, false, false, true, true, false, true, true, true, true, true, false]
+const YELLOW_PROC = [false, false, false, false, false, false, true, true, true, true, false, false, false, false, false, false]
 const BUG_PROC = [false, false, false, false, false, false, false, false, false, false, false, false, false, true, true, false]
-const DB_DOWN = [false, true, true, false, false, false, true, true, false, false, false, false, false, false, false, false]
-const ROCKET = [false, true, false, false, false, false, true, false, false, false, false, false, false, false, false, false]
+const DB_DOWN = [false, false, true, true, false, false, false, true, false, false, false, false, false, false, false, false]
+const ROCKET = [false, false, true, false, false, false, false, true, false, false, false, false, false, false, false, false]
 const TWO_DBS = [false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true]
 const DB_A_Y = 70
 const DB_B_Y = 250
@@ -156,6 +156,23 @@ export default function App() {
       setReadTarget('A')
       replayCount.current = 0
     }
+    if (stage === TWO_DB_STAGE) {
+      // Both DBs are full from the start
+      setDbAItems(Array(12).fill(BLUE))
+      setDbBItems(Array(12).fill(BLUE))
+      downARef.current = false
+      downBRef.current = false
+      setDownA(false)
+      setDownB(false)
+      setReadTarget('A')
+    }
+    if (stage === 0) {
+      // Empty starting point: nothing has flowed yet
+      packets.current = []
+      falling.current = []
+      setBucket(0)
+      setDbItems([])
+    }
     const delay = ROCKET[stage] ? 1200 : 0
     const t = setTimeout(() => {
       dbDownRef.current = DB_DOWN[stage]
@@ -217,8 +234,8 @@ export default function App() {
 
     const run = async () => {
       // Start state: both DBs hold data, Read API on A, bucket full
-      setDbAItems(Array(8).fill(BLUE))
-      setDbBItems(Array(8).fill(BLUE))
+      setDbAItems(Array(12).fill(BLUE))
+      setDbBItems(Array(12).fill(BLUE))
       setDown('A', false)
       setDown('B', false)
       setReadTarget('A')
