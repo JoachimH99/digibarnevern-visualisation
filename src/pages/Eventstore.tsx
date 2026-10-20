@@ -8,28 +8,28 @@ const STEP = { SAK_IN: 0, LOOKUP_EMPTY: 1, CREATE_EVENTS: 2, STORE: 3, LOOKUP: 4
 const SCENARIO_STEPS = 6
 
 const CAPTIONS = [
-  'En sak glir inn. Den har UUID, fødselsnummer og et underobjekt, Tiltak, med egen UUID og startdato.',
+  'Vi mottar en innsendt sak.',
   'Vi sjekker om saken finnes i event-databasen. Ingen treff.',
-  'Vi går gjennom saken fra topp til bunn og lager et event for hver endring.',
-  'Eventene lagres i databasen.',
-  'Vi slår opp saks-id-en, og eventene hentes ut av databasen.',
-  'Eventene spilles av i samme rekkefølge og bygger opp saken på nytt.',
+  'Vi går gjennom saken og lager et event for hver endring.',
+  'Events lagres i databasen.',
+  'Når vi skal bygge opp siste versjon av en sak henter vi først ut alle events tilhørende saken.',
+  'Vi går gjennom alle events i kronologisk rekkefølge, og endrer de spesifiserte feltene. Til slutt sitter vi igjen med den fullstendige saken',
   // Scenario 1: other fødselsnummer and another tiltak
-  'En ny versjon av saken kommer inn. Samme sak-uuid, men et annet fødselsnummer og et annet tiltak.',
-  'Vi slår opp sak-uuid og får de 4 eventene fra forrige gang.',
-  'Vi bygger den eksisterende saken fra disse eventene.',
-  'Event-DB-en tones ut. Vi sammenligner innkommende og eksisterende sak felt for felt, og der vi finner endringer lager vi events.',
-  'Den eksisterende saken forsvinner og event-DB-en er tilbake. De nye eventene lagres, og vi henter ut alle eventene på saken: nå er det 7.',
-  'Vi bygger saken fra de 7 eventene. Saken har nå to tiltak.',
+  'En ny innsending av saken kommer inn. Samme sak-uuid, men et annet fødselsnummer og et annet tiltak.',
+  'Vi slår opp sak-uuid og finner 4 events fra forrige gang.',
+  'Nå må vi først bygge den eksisterende saken fra disse eventene.',
+  'Vi sammenligner innkommende og eksisterende sak felt for felt, og der vi finner endringer lager vi events.',
+  'De nye eventene lagres, og vi henter ut alle eventene på saken.',
+  'Vi bygger den fullstendige saken, som nå har to tiltak.',
   // Scenario 2: the tiltak is marked as deleted
-  'Vi starter igjen med de samme 4 eventene. En ny versjon av saken kommer inn: samme tiltak, men nå med ErSlettet = true.',
-  'Vi slår opp sak-uuid og får de 4 eventene.',
-  'Vi bygger den eksisterende saken fra disse eventene.',
+  'En ny innsending for en eksisterende sak kommer inn: samme tiltak, men med ErSlettet = true.',
+  'Vi bygger den eksisterende saken fra eksisterende events.',
+  'Vi bygger den eksisterende saken fra eksisterende events.',
   'Vi sammenligner felt for felt. Eneste forskjell er ErSlettet, som gir ett nytt event.',
-  'Det nye eventet lagres, og vi henter ut alle eventene på saken: nå er det 5.',
-  'Vi bygger saken fra de 5 eventene. Når vi kommer til «ErSlettet oppdatert» fjernes tiltaket.',
+  'Det nye eventet lagres, og vi henter ut alle eventene på saken.',
+  'Vi bygger saken. Når vi kommer til «ErSlettet oppdatert» fjernes tiltaket.',
   // Toggling
-  'Hvis ErSlettet veksler mellom true og false, får vi et nytt «ErSlettet oppdatert»-event for hver endring. Når vi bygger saken forsvinner tiltaket ved true og dukker opp igjen ved false.',
+  'Ved å endre ErSlettet kan vi slette og gjenopprette elementer.',
 ]
 
 // ---------- Data model ----------
