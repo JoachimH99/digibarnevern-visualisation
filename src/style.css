@@ -29,3 +29,23 @@ svg { width: min(96vw, 1100px); height: auto; }
 .fast .rocket-wrap { animation-delay: 0.6s; }
 .fast .boom { animation-duration: 0.6s; animation-delay: 0.55s; }
 .node.bug rect { stroke: #dc2626; }
+.ev rect { fill: #fff; stroke: var(--ink); stroke-width: 2; transition: stroke 0.3s, fill 0.3s; }
+.ev text { font-size: 14px; text-anchor: middle; fill: var(--ink); }
+.ev text.ev-name { font-weight: 600; }
+.ev text.ev-field { font-size: 11px; }
+.ev.active rect { stroke: #ca8a04; fill: #fef9c3; }
+.field { font-size: 16px; fill: var(--ink); }
+.field-title { font-size: 18px; font-weight: 600; fill: var(--ink); }
+.label { font-size: 18px; text-anchor: middle; fill: var(--ink); }
+@keyframes appear { from { opacity: 0; } to { opacity: 1; } }
+svg.wide { width: min(96vw, 1400px); }
+.sql { font: 12px ui-monospace, Menlo, monospace; fill: var(--ink); }
+.sql-box { fill: #f3f4f6; stroke: var(--ink); stroke-width: 2; }
+.slide-in { animation: slide-in 1s ease-out; }
+@keyframes slide-in { from { transform: translateX(-400px); } to { transform: none; } }
+@keyframes chip-move {
+  0% { transform: translate(var(--fx), var(--fy)); opacity: 0; }
+  1% { transform: translate(var(--fx), var(--fy)); opacity: 1; }
+  100% { transform: translate(var(--tx), var(--ty)); opacity: 1; }
+}
+@keyframes fade-out { to { opacity: 0; } }
