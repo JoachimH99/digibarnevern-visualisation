@@ -1,6 +1,7 @@
 import { NavLink, Route, Routes } from 'react-router-dom'
 import Replay from './pages/Replay'
 import Eventstore from './pages/Eventstore'
+import SciFiReplay from './pages/SciFiReplay'
 
 
 export default function App() {
@@ -13,6 +14,7 @@ export default function App() {
       <Routes>
         <Route path="/replay" element={<Replay />} />
         <Route path="/eventstore" element={<Eventstore />} />
+        <Route path="/scifi" element={<SciFiReplay />} />
         <Route path="*" element={<Replay />} />
       </Routes>
     </>

@@ -1,4 +1,5 @@
 import { useEffect, useReducer, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 
 type Pt = [number, number]
 type Packet = {
@@ -115,6 +116,7 @@ function locate(p: Packet, now: number) {
 }
 
 export default function Replay() {
+  const navigate = useNavigate()
   const [stage, setStage] = useState(0)
   const [dbItems, setDbItems] = useState<string[]>([])
   const [bucket, setBucket] = useState(0)
@@ -462,12 +464,15 @@ export default function Replay() {
   // Keyboard
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowRight') setStage((s) => Math.min(s + 1, STAGES.length - 1))
+      if (e.key === 'ArrowRight') {
+        if (stageRef.current >= STAGES.length - 1) navigate('/scifi')
+        else setStage((s) => Math.min(s + 1, STAGES.length - 1))
+      }
       if (e.key === 'ArrowLeft') setStage((s) => Math.max(s - 1, 0))
     }
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)
-  }, [])
+  }, [navigate])
 
   const now = performance.now()
   const locked = !FIKS_ACTIVE[stage] && stage > 0
@@ -636,7 +641,7 @@ export default function Replay() {
       <div className="controls">
         <button disabled={stage === 0} onClick={() => setStage(stage - 1)}>← Back</button>
         <span>{stage + 1} / {STAGES.length}</span>
-        <button disabled={stage === STAGES.length - 1} onClick={() => setStage(stage + 1)}>Next →</button>
+        <button onClick={() => (stage === STAGES.length - 1 ? navigate('/scifi') : setStage(stage + 1))}>Next →</button>
       </div>
     </>
   )
