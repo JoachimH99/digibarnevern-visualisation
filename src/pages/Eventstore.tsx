@@ -30,6 +30,9 @@ const CAPTIONS = [
   'Vi bygger saken. Når vi kommer til «ErSlettet oppdatert» fjernes tiltaket.',
   // Toggling
   'Ved å endre ErSlettet kan vi slette og gjenopprette elementer.',
+  // Time travel
+  'Hvert event har et tidspunkt. Før vi bygger saken kan vi filtrere eventene på opprettelsestidspunkt, og dermed se tidligere versjoner av saken.',
+  'Events fungerer også som et godt grunnlagg for en aktivitetslogg.'
 ]
 
 // ---------- Data model ----------
@@ -66,8 +69,10 @@ type EventDef = {
   fields: [label: string, value: string][]
   part: Part
   tiltakUuid?: string
+  time?: string // creation time, sortable (YYYY-MM-DD HH:mm)
   apply: (sak: SakState) => SakState
 }
+type TimedEvent = EventDef & { time: string }
 
 const sakOpprettet = (uuid: string): EventDef => ({
   name: 'Sak opprettet',
@@ -165,12 +170,33 @@ const rowOf = (sc: Scenario, e: EventDef) => sc.rows.indexOf(e.part)
 const TOGGLE_STEP = SCENARIOS[SCENARIOS.length - 1].start + SCENARIO_STEPS
 const TOGGLE_EVENTS = Array.from({ length: 7 }, (_, i) => erSlettetOppdatert(SAK_V3.tiltak[0].uuid, i % 2 === 0))
 
+// Very last step: the 7 events from step 11, but the second fødselsnummer update is replaced by
+// "tiltak deleted". Every event has a creation time, so we can filter before building ("time travel").
+const TIME_TRAVEL_STEP = TOGGLE_STEP + 1
+// After that: no DB and no sak, only the same events as a list in the middle
+const LIST_STEP = TIME_TRAVEL_STEP + 1
+const PAST_TIMES = [
+  '2025-03-01 09:12',
+  '2025-03-01 09:13',
+  '2025-03-02 10:40',
+  '2025-03-02 10:41',
+  '2025-03-15 14:05',
+  '2025-03-20 08:30',
+  '2025-03-20 08:31',
+]
+const PAST_BASE = SCENARIOS[0].allEvents
+const PAST_REPLACED = PAST_BASE.map((e) => e.part).lastIndexOf('fnr')
+const PAST_EVENTS: TimedEvent[] = PAST_BASE.map((e, i) => ({
+  ...(i === PAST_REPLACED ? erSlettetOppdatert(SAK_V1.tiltak[0].uuid, true) : e),
+  time: PAST_TIMES[i],
+}))
+
 // Speed of the top-to-bottom walk through the sak (create events, compare). 1 = original speed.
 const SCAN_SPEED = 0.6
 
 // ---------- Layout ----------
 const VIEW_W = 1370
-const VIEW_H = 460
+const VIEW_H = 490
 const CARD_W = 290
 const CARD_Y = 30
 const TILTAK_H = 112
@@ -179,11 +205,12 @@ const LEFT_CARD_X = 20
 const EXISTING_CARD_X = 335 // existing sak slides here, next to the incoming one
 const RIGHT_CARD_X = 1060
 const CHIP_W = 220
-const CHIP_H = 50
+const CHIP_H = 56
 const CHIP_GAP = 6
 const LEFT_CHIP_X = 335 // events created from the first sak
 const NEW_CHIP_X = 800 // events created by the comparison
 const RIGHT_CHIP_X = 815 // events fetched from the DB
+const LIST_CHIP_X = (VIEW_W - CHIP_W) / 2 // events in the middle (last step)
 const DB_X = 575
 const DB_W = 220
 const DB_Y = 40
@@ -283,6 +310,14 @@ const FETCH_ROUNDS: FetchRound[] = [
     },
   ]),
 ]
+// The time travel step fetches its events like the other rounds, but is handled separately (see the page)
+const PAST_ROUND: FetchRound = {
+  lookup: TIME_TRAVEL_STEP,
+  rebuild: TIME_TRAVEL_STEP,
+  events: PAST_EVENTS,
+  slots: maxTiltak(PAST_EVENTS),
+  lookupDelay: 0,
+}
 const isActive = (stage: number, from: number, exit = Infinity) => stage >= from && stage <= exit
 
 // ---------- Components ----------
@@ -294,6 +329,7 @@ function EventChip({ event, active, style }: { event: EventDef; active?: boolean
       {event.fields.map(([label, value], i) => (
         <text key={label} x={CHIP_W / 2} y={31 + i * 13} className="ev-field">{label}: {value}</text>
       ))}
+      {event.time && <text x={CHIP_W / 2} y="52" className="ev-time">{event.time}</text>}
     </g>
   )
 }
@@ -395,6 +431,8 @@ export default function Eventstore() {
   const current = [...SCENARIOS].reverse().find((sc) => stage >= sc.start) // latest scenario that has started
   const scenario = current && stage < current.start + SCENARIO_STEPS ? current : undefined
   const isToggle = stage === TOGGLE_STEP
+  const isPast = stage === TIME_TRAVEL_STEP
+  const isList = stage === LIST_STEP
   const isCompare = !!scenario && stage === scenario.steps.compare
   const isLookupAll = !!scenario && stage === scenario.steps.lookupAll
 
@@ -405,6 +443,12 @@ export default function Eventstore() {
   const compared = useSequence(isCompare, scenario?.rows.length ?? 0, 800 / SCAN_SPEED, 1100 / SCAN_SPEED)
   const compareRow = isCompare ? compared - 1 : -1
   const toggled = useSequence(isToggle, TOGGLE_EVENTS.length, 1600, 900, 600) // loops
+  // Time travel: after the events have come out, the cutoff moves down through them (once).
+  // 0 = no cutoff yet: the events are not dimmed, and the sak is still empty.
+  const swept = useSequence(isPast, PAST_EVENTS.length, 4600, 1500)
+  const cutoff = swept === 0 ? undefined : PAST_EVENTS[swept - 1].time
+  const pastIncluded = PAST_EVENTS.filter((e) => cutoff === undefined || e.time <= cutoff) // filter on creation time...
+  const pastSak = visibleSak(buildSak(cutoff === undefined ? [] : pastIncluded)) // ...then build
 
   const sql = ['SELECT * FROM events', 'WHERE sak_uuid =', `  '${SAK_V1.uuid}'`, 'ORDER BY id;']
   const incoming = current?.incoming ?? SAK_V1 // sak on the left
@@ -510,14 +554,50 @@ export default function Eventstore() {
           />
         )}
 
-        <Database label="Event-DB" opacity={isCompare ? 0 : 1} delay={isLookupAll ? 0.3 : 0} />
+        {/* Time travel step: events with creation times, a cutoff, and the sak built from the events before it */}
+        {(isPast || isList) &&
+          PAST_EVENTS.map((e, i) => (
+            <g key={`past-${i}`} style={{ opacity: pastIncluded.includes(e) ? 1 : 0.25, transition: 'opacity 0.4s' }}>
+              <EventChip
+                event={e}
+                style={
+                  isList
+                    ? { transform: at(LIST_CHIP_X, slotY(i)), transition: 'transform 1s ease-in-out' }
+                    : fetchedStyle(PAST_ROUND, i)
+                }
+              />
+            </g>
+          ))}
+        {isPast && (
+          <g
+            style={{
+              transform: at(0, slotY(Math.max(swept, 1)) - CHIP_GAP / 2),
+              opacity: swept > 0 ? 1 : 0,
+              transition: 'transform 0.5s, opacity 0.3s',
+            }}
+          >
+            <line x1={RIGHT_CHIP_X - 12} x2={RIGHT_CHIP_X + CHIP_W + 12} stroke="#dc2626" strokeWidth="3" strokeDasharray="8 5" />
+          </g>
+        )}
+        {isPast && (
+          <>
+            <text x={RIGHT_CARD_X + CARD_W / 2} y="20" className="label" style={{ opacity: cutoff ? 1 : 0, transition: 'opacity 0.3s' }}>
+              Saken per {cutoff}
+            </text>
+            <SakCard key="past-card" x={RIGHT_CARD_X} y={CARD_Y} sak={pastSak} slots={PAST_ROUND.slots} />
+          </>
+        )}
+
+        <Database label="Event-DB" opacity={isCompare || isList ? 0 : 1} delay={isLookupAll ? 0.3 : 0} />
 
         <FlowArrow y={VIEW_H - 20} />
 
         {/* Incoming sak on the left (remounts, and slides in, when a new one arrives) */}
-        <g key={current ? `sak-${current.start}` : 'sak-first'} className="slide-in">
-          <SakCard x={LEFT_CARD_X} y={CARD_Y} sak={incoming} slots={1} highlight={incomingHighlight} />
-        </g>
+        {!isPast && !isList && (
+          <g key={current ? `sak-${current.start}` : 'sak-first'} className="slide-in">
+            <SakCard x={LEFT_CARD_X} y={CARD_Y} sak={incoming} slots={1} highlight={incomingHighlight} />
+          </g>
+        )}
 
         {/* Sakene built from fetched events */}
         {FETCH_ROUNDS.map((round, r) => {
@@ -546,6 +626,7 @@ export default function Eventstore() {
         })}
 
         {stage === STEP.LOOKUP_EMPTY && <Lookup key={stage} sql={sql} result="Ingen treff" ok={false} />}
+        {isPast && <Lookup key={stage} sql={sql} result={`${PAST_EVENTS.length} treff`} ok />}
         {lookupRound && (
           <Lookup key={stage} sql={sql} result={`${lookupRound.events.length} treff`} ok delay={lookupRound.lookupDelay} />
         )}

@@ -33,6 +33,7 @@ svg { width: min(96vw, 1100px); height: auto; }
 .ev text { font-size: 14px; text-anchor: middle; fill: var(--ink); }
 .ev text.ev-name { font-weight: 600; }
 .ev text.ev-field { font-size: 11px; }
+.ev text.ev-time { font-size: 10px; fill: #6b7280; }
 .ev.active rect { stroke: #ca8a04; fill: #fef9c3; }
 .field { font-size: 16px; fill: var(--ink); }
 .field-title { font-size: 18px; font-weight: 600; fill: var(--ink); }
